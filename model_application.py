@@ -7,9 +7,6 @@ from PIL import Image
 with open("dropout_GAP_history.pkl", "rb") as f:
     simple_history = pickle.load(f)
 
-# Load confusion matrix figure (Matplotlib figure)
-with open("conf_matrix_fig.pkl", "rb") as f:
-    conf_matrix_fig = pickle.load(f)
 
 # Function to plot training history interactively with Plotly
 def plot_training_history_interactive(history):
@@ -84,7 +81,7 @@ elif page == "Python Model Results":
     st.plotly_chart(interactive_fig, use_container_width=True)
 
     st.subheader("Confusion Matrix")
-    st.pyplot(conf_matrix_fig)
+    st.image("conf_matrix_python.png", use_container_width=True)
 
 elif page == "R Model Results":
     st.title("R Model Results")
