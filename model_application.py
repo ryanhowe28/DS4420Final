@@ -48,9 +48,9 @@ page = st.sidebar.selectbox("Choose a page", ["Home Page", "Python Model Results
 
 if page == "Home Page":
     st.image("satellite_image.jpg", use_container_width=True)
-    st.title("Satellite Image Classification Project")
+    st.title("Satellite Image Classification Project: Ryan Howe & Anna Kim")
     st.markdown("""
-    Welcome!  
+    Welcome!
     With the increase of technology in space, satellite imagery has become a massive tool 
     for providing critical visual data of our planet and many others. Satellite imagery 
     is used for environment monitoring, urban/agricultural planning and land use. However, 
