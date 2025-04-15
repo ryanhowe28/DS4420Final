@@ -1,0 +1,427 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(jpeg)
+library(png)
+
+read_image_file <- function(file) {
+  ext <- tolower(tools::file_ext(file))
+  if (ext %in% c("jpg", "jpeg")) {
+    img <- jpeg::readJPEG(file)
+  } else if (ext == "png") {
+    img <- png::readPNG(file)
+  } else {
+    stop("Unsupported file type: ", ext)
+  }
+  return(img)
+}
+
+resize_image <- function(img, new_width, new_height) {
+  dims <- dim(img)
+  if (length(dims) == 2) {  
+    orig_height <- dims[1]
+    orig_width <- dims[2]
+    channels <- 1
+    img <- array(img, dim = c(orig_height, orig_width, 1))
+  } else {
+    orig_height <- dims[1]
+    orig_width <- dims[2]
+    channels <- dims[3]
+  }
+  
+  new_img <- array(0, dim = c(new_height, new_width, channels))
+  scale_y <- orig_height / new_height
+  scale_x <- orig_width / new_width
+  
+  for (y in 1:new_height) {
+    orig_y <- min(orig_height, max(1, round(y * scale_y)))
+    for (x in 1:new_width) {
+      orig_x <- min(orig_width, max(1, round(x * scale_x)))
+      new_img[y, x, ] <- img[orig_y, orig_x, ]
+    }
+  }
+  return(new_img)
+}
+
+```
+
+```{r}
+img_width  <- 64   
+img_height <- 64   
+channels   <- 3     
+batch_size <- 32L
+epochs     <- 50L
+learning_rate <- 0.001
+dropout_rates <- c(0.2, 0.2) 
+
+input_size <- img_width * img_height * channels
+layer_dims <- c(input_size, 256, 128, 4)
+
+data_dir <- "data"
+
+relu <- function(x) {
+  pmax(0, x)
+}
+relu_derivative <- function(x) {
+  (x > 0) * 1  
+}
+
+softmax <- function(z) {
+  z_stable <- z - apply(z, 1, max)
+  exp_z <- exp(z_stable)
+  exp_z / rowSums(exp_z)
+}
+
+compute_loss <- function(Y, Y_hat) {
+  m <- nrow(Y)
+  loss <- -sum(Y * log(Y_hat + 1e-8)) / m
+  loss
+}
+
+compute_accuracy <- function(Y, Y_hat) {
+  preds <- max.col(Y_hat)
+  labels <- max.col(Y)
+  mean(preds == labels)
+}
+
+initialize_parameters <- function(layer_dims) {
+  parameters <- list()
+  L <- length(layer_dims)
+  for (l in 2:L) {
+    parameters[[paste0("W", l - 1)]] <-
+      matrix(rnorm(layer_dims[l - 1] * layer_dims[l], mean = 0,
+                   sd = sqrt(2 / layer_dims[l - 1])),
+             nrow = layer_dims[l - 1], ncol = layer_dims[l])
+    parameters[[paste0("b", l - 1)]] <- matrix(0, nrow = 1, ncol = layer_dims[l])
+  }
+  parameters
+}
+
+initialize_adam <- function(parameters) {
+  v <- list()  # first moment estimate
+  s <- list()  # second moment estimate
+  for (name in names(parameters)) {
+    dims <- dim(parameters[[name]])
+    v[[name]] <- matrix(0, nrow = dims[1], ncol = dims[2])
+    s[[name]] <- matrix(0, nrow = dims[1], ncol = dims[2])
+  }
+  list(v = v, s = s)
+}
+
+```
+
+```{r}
+forward_propagation <- function(X, parameters, dropout_rates, training = TRUE) {
+  cache <- list()
+  
+  W1 <- parameters$W1; b1 <- parameters$b1
+  Z1 <- X %*% W1 + matrix(rep(b1, nrow(X)), nrow = nrow(X), byrow = TRUE)
+  A1 <- relu(Z1)
+  
+  if (is.null(dim(A1)) || length(dim(A1)) != 2) {
+    A1 <- matrix(A1, nrow = nrow(Z1), ncol = ncol(Z1))
+  }
+  cache$Z1 <- Z1
+  
+  if (training) {
+    dims_A1 <- dim(A1)
+    n_rows <- dims_A1[1]
+    n_cols <- dims_A1[2]
+    drop1 <- matrix(rbinom(length(A1), size = 1, prob = 1 - dropout_rates[1]),
+                    nrow = n_rows, ncol = n_cols)
+    A1 <- (A1 * drop1) / (1 - dropout_rates[1])
+    cache$drop1 <- drop1
+  }
+  cache$A1 <- A1
+  
+  W2 <- parameters$W2; b2 <- parameters$b2
+  Z2 <- A1 %*% W2 + matrix(rep(b2, nrow(A1)), nrow = nrow(A1), byrow = TRUE)
+  A2 <- relu(Z2)
+  
+  if (is.null(dim(A2)) || length(dim(A2)) != 2) {
+    A2 <- matrix(A2, nrow = nrow(Z2), ncol = ncol(Z2))
+  }
+  cache$Z2 <- Z2
+  
+  if (training) {
+    dims_A2 <- dim(A2)
+    n_rows <- dims_A2[1]
+    n_cols <- dims_A2[2]
+    drop2 <- matrix(rbinom(length(A2), size = 1, prob = 1 - dropout_rates[2]),
+                    nrow = n_rows, ncol = n_cols)
+    A2 <- (A2 * drop2) / (1 - dropout_rates[2])
+    cache$drop2 <- drop2
+  }
+  cache$A2 <- A2
+
+  W3 <- parameters$W3; b3 <- parameters$b3
+  Z3 <- A2 %*% W3 + matrix(rep(b3, nrow(A2)), nrow = nrow(A2), byrow = TRUE)
+  A3 <- softmax(Z3)
+  cache$Z3 <- Z3
+  cache$A3 <- A3
+  
+  list(A3 = A3, cache = cache)
+}
+
+backward_propagation <- function(X, Y, parameters, cache, dropout_rates, training = TRUE) {
+  m <- nrow(X)
+  grads <- list()
+  
+  A3 <- cache$A3
+  A2 <- cache$A2
+  Z2 <- cache$Z2
+  A1 <- cache$A1
+  Z1 <- cache$Z1
+  
+  dZ3 <- A3 - Y  
+  grads$dW3 <- t(A2) %*% dZ3 / m
+  grads$db3 <- colSums(dZ3) / m
+  
+  dA2 <- dZ3 %*% t(parameters$W3)
+  if (training) {
+    dA2 <- dA2 * cache$drop2 / (1 - dropout_rates[2])
+  }
+  dZ2 <- dA2 * (Z2 > 0)  
+  grads$dW2 <- t(A1) %*% dZ2 / m
+  grads$db2 <- colSums(dZ2) / m
+  
+  dA1 <- dZ2 %*% t(parameters$W2)
+  if (training) {
+    dA1 <- dA1 * cache$drop1 / (1 - dropout_rates[1])
+  }
+  dZ1 <- dA1 * (Z1 > 0)
+  grads$dW1 <- t(X) %*% dZ1 / m
+  grads$db1 <- colSums(dZ1) / m
+  
+  grads
+}
+
+update_parameters_adam <- function(parameters, grads, adam_cache, t, learning_rate = 0.001,
+                                     beta1 = 0.9, beta2 = 0.999, epsilon = 1e-8) {
+  v <- adam_cache$v
+  s <- adam_cache$s
+  
+  for (param in names(parameters)) {
+    grad_name <- paste0("d", param)  
+    
+    v[[param]] <- beta1 * v[[param]] + (1 - beta1) * grads[[grad_name]]
+    s[[param]] <- beta2 * s[[param]] + (1 - beta2) * (grads[[grad_name]]^2)
+    
+    v_corrected <- v[[param]] / (1 - beta1^t)
+    s_corrected <- s[[param]] / (1 - beta2^t)
+    
+    parameters[[param]] <- parameters[[param]] - learning_rate * v_corrected / (sqrt(s_corrected) + epsilon)
+  }
+  list(parameters = parameters, v = v, s = s)
+}
+
+```
+
+```{r}
+
+load_dataset <- function(data_dir, img_width, img_height, channels) {
+  categories <- c("cloudy", "desert", "green_area", "water")
+  X_list <- list()
+  Y_list <- list()
+  
+  for (i in seq_along(categories)) {
+    category <- categories[i]
+    folder <- file.path(data_dir, category)
+    files <- list.files(folder, pattern = "\\.(jpg|jpeg|png)$", full.names = TRUE, ignore.case = TRUE)
+    cat("Loading", length(files), "images from", category, "\n")
+    for (file in files) {
+      img <- read_image_file(file)
+      img_resized <- resize_image(img, new_width = img_width, new_height = img_height)
+      
+      dims <- dim(img_resized)
+      if (length(dims) == 2) {
+        img_resized <- array(img_resized, dim = c(dims[1], dims[2], 1))
+      }
+      
+      if (dims[3] != channels) {
+        if (dims[3] == 1 && channels == 3) {
+          img_resized <- array(rep(img_resized, 3), dim = c(dims[1], dims[2], 3))
+        } else if (dims[3] > channels) {
+          img_resized <- img_resized[,,1:channels, drop = FALSE]
+        } else {
+          warning("Image ", file, " does not match expected channels. Found ", dims[3], " channels.")
+        }
+      }
+      
+      final_dims <- dim(img_resized)
+      expected_elems <- img_width * img_height * channels
+      if (prod(final_dims) != expected_elems) {
+        warning("Image ", file, " does not match expected dimensions after processing.")
+        next  
+      }
+      
+      x_vec <- as.vector(img_resized)
+      X_list[[length(X_list) + 1]] <- x_vec
+      Y_list[[length(Y_list) + 1]] <- i 
+    }
+  }
+  X <- do.call(rbind, X_list)
+  
+  one_hot <- function(labels, num_classes) {
+    m <- length(labels)
+    Y_mat <- matrix(0, nrow = m, ncol = num_classes)
+    for (j in 1:m) {
+      Y_mat[j, labels[j]] <- 1
+    }
+    Y_mat
+  }
+  Y <- one_hot(unlist(Y_list), 4)
+  list(X = X, Y = Y)
+}
+
+split_dataset <- function(X, Y, train_ratio = 0.8) {
+  m <- nrow(X)
+  indices <- sample(1:m)
+  train_end <- floor(m * train_ratio)
+  train_idx <- indices[1:train_end]
+  val_idx <- indices[(train_end + 1):m]
+  list(train_X = X[train_idx, , drop = FALSE], train_Y = Y[train_idx, , drop = FALSE],
+       val_X   = X[val_idx, , drop = FALSE],   val_Y   = Y[val_idx, , drop = FALSE])
+}
+
+```
+
+```{r}
+train_model <- function(train_X, train_Y, val_X, val_Y, parameters, epochs,
+                        batch_size, learning_rate, dropout_rates) {
+  adam_cache <- initialize_adam(parameters)
+  train_loss_history <- numeric(epochs)
+  train_acc_history <- numeric(epochs)
+  val_loss_history <- numeric(epochs)
+  val_acc_history <- numeric(epochs)
+  
+  m <- nrow(train_X)
+  num_batches <- ceiling(m / batch_size)
+  t_iter <- 0 
+  
+  for (epoch in 1:epochs) {
+    indices <- sample(1:m)
+    train_X <- train_X[indices, , drop = FALSE]
+    train_Y <- train_Y[indices, , drop = FALSE]
+    
+    epoch_loss <- 0
+    epoch_acc <- 0
+    
+    for (i in 1:num_batches) {
+      batch_start <- (i - 1) * batch_size + 1
+      batch_end <- min(i * batch_size, m)
+      X_batch <- train_X[batch_start:batch_end, , drop = FALSE]
+      Y_batch <- train_Y[batch_start:batch_end, , drop = FALSE]
+      
+      forward <- forward_propagation(X_batch, parameters, dropout_rates, training = TRUE)
+      A3 <- forward$A3
+      cache <- forward$cache
+      
+      loss <- compute_loss(Y_batch, A3)
+      acc <- compute_accuracy(Y_batch, A3)
+      epoch_loss <- epoch_loss + loss
+      epoch_acc <- epoch_acc + acc
+      
+      grads <- backward_propagation(X_batch, Y_batch, parameters, cache, dropout_rates, training = TRUE)
+      
+      t_iter <- t_iter + 1
+      update <- update_parameters_adam(parameters, grads, adam_cache, t_iter, learning_rate)
+      parameters <- update$parameters
+      adam_cache$v <- update$v
+      adam_cache$s <- update$s
+    }
+    
+    epoch_loss <- epoch_loss / num_batches
+    epoch_acc <- epoch_acc / num_batches
+    train_loss_history[epoch] <- epoch_loss
+    train_acc_history[epoch] <- epoch_acc
+    
+    forward_val <- forward_propagation(val_X, parameters, dropout_rates, training = FALSE)
+    A3_val <- forward_val$A3
+    val_loss <- compute_loss(val_Y, A3_val)
+    val_acc <- compute_accuracy(val_Y, A3_val)
+    val_loss_history[epoch] <- val_loss
+    val_acc_history[epoch] <- val_acc
+    
+    cat(sprintf("Epoch %d/%d: loss = %.4f, acc = %.4f | val_loss = %.4f, val_acc = %.4f\n",
+                epoch, epochs, epoch_loss, epoch_acc, val_loss, val_acc))
+  }
+  
+  list(parameters = parameters,
+       train_loss_history = train_loss_history,
+       train_acc_history = train_acc_history,
+       val_loss_history = val_loss_history,
+       val_acc_history = val_acc_history)
+}
+
+predict_model <- function(X, parameters, dropout_rates) {
+  forward <- forward_propagation(X, parameters, dropout_rates, training = FALSE)
+  preds <- max.col(forward$A3)
+  preds
+}
+
+compute_confusion_matrix <- function(true_labels, predicted_labels) {
+  table(True = true_labels, Predicted = predicted_labels)
+}
+
+```
+
+```{r}
+
+dataset <- load_dataset(data_dir, img_width, img_height, channels)
+cat("Total number of images loaded:", nrow(dataset$X), "\n")
+
+split <- split_dataset(dataset$X, dataset$Y, train_ratio = 0.8)
+train_X <- split$train_X
+train_Y <- split$train_Y
+val_X   <- split$val_X
+val_Y   <- split$val_Y
+
+cat("Training samples:", nrow(train_X), "Validation samples:", nrow(val_X), "\n")
+
+parameters <- initialize_parameters(layer_dims)
+
+model_out <- train_model(train_X, train_Y, val_X, val_Y,
+                         parameters, epochs, batch_size, learning_rate, dropout_rates)
+
+```
+
+```{r}
+plot(1:epochs, model_out$train_loss_history, type = "l", col = "blue",
+     ylim = range(c(model_out$train_loss_history, model_out$val_loss_history)),
+     xlab = "Epoch", ylab = "Loss", main = "Training vs. Validation Loss")
+lines(1:epochs, model_out$val_loss_history, col = "red")
+legend("topright", legend = c("Training Loss", "Validation Loss"), col = c("blue", "red"), lty = 1)
+
+plot(1:epochs, model_out$train_acc_history, type = "l", col = "blue",
+     ylim = range(c(model_out$train_acc_history, model_out$val_acc_history)),
+     xlab = "Epoch", ylab = "Accuracy", main = "Training vs. Validation Accuracy")
+lines(1:epochs, model_out$val_acc_history, col = "red")
+legend("bottomright", legend = c("Training Accuracy", "Validation Accuracy"), col = c("blue", "red"), lty = 1)
+
+predicted_classes <- predict_model(val_X, model_out$parameters, dropout_rates)
+true_classes <- max.col(val_Y)  # since Y is one-hot encoded
+cm <- compute_confusion_matrix(true_classes, predicted_classes)
+print(cm)
+
+final_val_loss <- model_out$val_loss_history[epochs]
+final_val_acc  <- model_out$val_acc_history[epochs]
+cat("Final Validation Loss:", final_val_loss, "\n")
+cat("Final Validation Accuracy:", final_val_acc, "\n")
+
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
